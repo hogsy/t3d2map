@@ -450,6 +450,10 @@ void ReadPolygon(void) {
         SkipProperty();
     }
 
+    if(plIsEmptyString(t3d.cur_brush->cur_poly->texture)) {
+        strncpy(t3d.cur_brush->cur_poly->texture, "none", sizeof(t3d.cur_brush->cur_poly->texture));
+    }
+
     unsigned int cur_vertex = 0;
     ParseBlock() {
         ParseNext();
@@ -702,6 +706,10 @@ void ParseT3D(const char *path) {
 
 const char *GetEntityForActor(Actor *actor) {
     if(startup_actors || actor->class_i == ACT_Unknown) {
+        if(actor->class[0] == '\0' || actor->class[0] == ' ') {
+            printf("warning: invalid actor name, possibly failed to parse?\n");
+            return "unknown";
+        }
         return &actor->class[0];
     }
 
@@ -741,8 +749,8 @@ void WriteMap(const char *path) {
         exit(EXIT_FAILURE);
     }
 
-#define WriteField(a, b)  fprintf(fp, " \"%s\" \"%s\"\n", (a), (b))
-#define WriteVector(a, b) fprintf(fp, " \"%s\" \"%d %d %d\"\n", (a), (int)(b).x, (int)(b).y, (int)(b).z);
+#define WriteField(a, b)  fprintf(fp, "\"%s\" \"%s\"\n", (a), (b))
+#define WriteVector(a, b) fprintf(fp, "\"%s\" \"%d %d %d\"\n", (a), (int)(b).x, (int)(b).y, (int)(b).z);
 
     /* write out the world spawn */
 
@@ -750,24 +758,53 @@ void WriteMap(const char *path) {
     switch(startup_format) {
         default:
         case MAP_FORMAT_IDT2: {
-            WriteField("classname", "worldspawn");
-            WriteField("wad", "/gfx/base.wad");
-            WriteField("worldtype", "0");
+            WriteField(" classname", "worldspawn");
+            WriteField(" wad", "/gfx/base.wad");
+            WriteField(" worldtype", "0");
         } break;
     }
 
-    for(unsigned int i = 0; i < t3d.num_brushes; ++i) {}
+    printf("writing %d brushes...\n", t3d.num_brushes);
+    for(unsigned int i = 0; i < t3d.num_brushes; ++i) {
+        fprintf(fp, " {\n");
+
+#ifdef DEBUG_PARSER
+        printf("brush %d\n", i);
+        printf(" name: %s\n", t3d.brushes[i].name);
+        printf(" csg:  %d\n", t3d.brushes[i].csg);
+#endif
+
+        for(unsigned int j = 0; j < t3d.brushes[i].num_poly; ++j) {
+            Polygon *cur_face = &t3d.brushes[i].poly_list[j];
+
+            fprintf(fp, "  ( %d %d %d ) ( %d %d %d ) ( %d %d %d ) %s 0 0 0 0 0\n",
+                    (int) cur_face->vertices[0].x, (int) cur_face->vertices[0].y, (int) cur_face->vertices[0].z,
+                    (int) cur_face->vertices[1].x, (int) cur_face->vertices[1].y, (int) cur_face->vertices[1].z,
+                    (int) cur_face->vertices[2].x, (int) cur_face->vertices[2].y, (int) cur_face->vertices[2].z,
+                    cur_face->texture
+            );
+
+#ifdef DEBUG_PARSER
+            printf(" poly %d\n", j);
+            printf("  texture: %s\n", cur_face->texture);
+            printf("  group:   %s\n", cur_face->group);
+            printf("  item:    %s\n", cur_face->item);
+#endif
+        }
+
+        fprintf(fp, " }\n");
+    }
 
     fprintf(fp, "}\n");
 
     for(unsigned int i = 0; i < t3d.num_actors; ++i) {
         fprintf(fp, "{\n");
 
-        WriteField("classname", GetEntityForActor(&t3d.actors[i]));
-        WriteVector("origin", t3d.actors[i].position);
+        WriteField(" classname", GetEntityForActor(&t3d.actors[i]));
+        WriteVector(" origin", t3d.actors[i].position);
 
         if(pl_strncasecmp(t3d.actors[i].class, "light", 5) == 0) {
-            WriteField("light", "255");
+            WriteField(" light", "255");
         }
 
         fprintf(fp, "}\n");
