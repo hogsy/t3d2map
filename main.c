@@ -6,6 +6,9 @@
 
 #define VERSION "0.01"
 
+/* debug flags */
+#define DEBUG_PARSER
+
 enum {
     MAP_FORMAT_IDT2,    /* Quake, Quake 2 */
     MAP_FORMAT_IDT3,    /* Quake 3 */
@@ -242,19 +245,21 @@ int ParseInteger(void) {
     return (atoi(n));
 }
 
-int ParseVectorCoordinate(void) {
-    int i = (int) strtol(t3d.cur_pos, (char**)(&t3d.cur_pos), 10);
-    if      (*t3d.cur_pos == '.') t3d.cur_pos++;
-    while   (*t3d.cur_pos == '0') t3d.cur_pos++;
-    if      (*t3d.cur_pos == ',') t3d.cur_pos++;
+float ParseVectorCoordinate(void) {
+    float f = strtof(t3d.cur_pos, (char**)(&t3d.cur_pos));
+    if (*t3d.cur_pos == ',') t3d.cur_pos++;
 
-    return i;
+#ifdef DEBUG_PARSER /* debug */
+    printf("read coord %f\n", f);
+#endif
+
+    return f;
 }
 
-IVector ParseVector(void) {
+UVector ParseVector(void) {
     if(*t3d.cur_pos == '(') t3d.cur_pos++;
 
-    IVector vector = {
+    UVector vector = {
         ParseVectorCoordinate(),
         ParseVectorCoordinate(),
         ParseVectorCoordinate()
@@ -315,7 +320,7 @@ bool ReadField(const char *prop) {
     return false;
 }
 
-bool ReadVectorField(const char *prop, IVector *vector) {
+bool ReadVectorField(const char *prop, UVector *vector) {
     if(!ReadField(prop)) {
         return false;
     }
@@ -736,8 +741,8 @@ void WriteMap(const char *path) {
         exit(EXIT_FAILURE);
     }
 
-#define WriteField(a, b)        fprintf(fp, " \"%s\" \"%s\"\n", (a), (b))
-#define WriteVector(a, b) fprintf(fp, " \"%s\" \"%d %d %d\"\n", (a), (b).x, (b).y, (b).z);
+#define WriteField(a, b)  fprintf(fp, " \"%s\" \"%s\"\n", (a), (b))
+#define WriteVector(a, b) fprintf(fp, " \"%s\" \"%d %d %d\"\n", (a), (int)(b).x, (int)(b).y, (int)(b).z);
 
     /* write out the world spawn */
 

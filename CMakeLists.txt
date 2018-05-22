@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.9.4)
 project(t3d2map C)
 
 set(CMAKE_C_STANDARD 11)
