@@ -22,6 +22,7 @@ unsigned int startup_format = MAP_FORMAT_IDT2;
 
 bool startup_test = false;
 bool startup_actors = false;
+bool startup_add = false;
 
 void GameCommand(const char *parm) {
     if(strncmp("idt2", parm, 4) == 0) { /* this is the default */
@@ -64,10 +65,6 @@ typedef struct IVector {
     int x, y, z;
 } IVector;
 
-void PrintVector(IVector vector) {
-    printf("vector %d %d %d\n", vector.x, vector.y, vector.z);
-}
-
 /* UE types */
 
 typedef struct UVector {
@@ -77,6 +74,10 @@ typedef struct UVector {
 typedef struct UColor {
     char r, g, b, a;
 } UColor;
+
+void PrintVector(UVector vector) {
+    printf("vector %f %f %f\n", vector.x, vector.y, vector.z);
+}
 
 /****************************
  * Actors
@@ -94,12 +95,15 @@ enum {
 
     ACT_Sparks,         /* env_spark */
 
+    ACT_LevelSummary,   /* worldspawn */
+
     ACT_Unknown
 };
 
 typedef struct ActorDef {
     const char *name;
     unsigned int id;
+    void*data;
 } ActorDef;
 ActorDef actor_definitions[]={
         {"Brush",           ACT_Brush},
@@ -108,6 +112,7 @@ ActorDef actor_definitions[]={
         {"Light",           ACT_Light},
         {"Spotlight",       ACT_Spotlight},
         {"Sparks",          ACT_Sparks},
+        {"LevelSummary",    ACT_LevelSummary},
 
         {NULL}
 };
@@ -130,7 +135,32 @@ typedef struct Actor {
     char class[64];
     unsigned int class_i;
 
-    UVector position;
+    UVector location;
+
+    union {
+        struct {
+            float time;
+            float day_fraction;
+
+            unsigned int ticks;
+            unsigned int year;
+            unsigned int month;
+            unsigned int day;
+            unsigned int hour;
+            unsigned int second;
+            unsigned int millisecond;
+        } LevelDescriptor;
+
+        struct {
+            char title[32];
+            char author[32];
+            char player_count[32];
+            char level_enter_text[32];
+
+            int recommended_enemies;
+            int recommended_teammates;
+        } LevelSummary;
+    };
 } Actor;
 
 /****************************/
@@ -149,6 +179,14 @@ typedef struct Polygon { /* i 'ssa face >:I */
     UVector origin;
 } Polygon;
 
+enum {
+    CSG_Active,
+    CSG_Add,
+    CSG_Subtract,
+    CSG_Intersect,
+    CSG_Deintersect,
+};
+
 typedef struct Brush { /* i 'ssa primitive >:I */
     char name[32];
 
@@ -161,14 +199,7 @@ typedef struct Brush { /* i 'ssa primitive >:I */
     UVector pre_pivot;
     UVector post_pivot;
 
-    enum {
-        CSG_Active,
-        CSG_Add,
-        CSG_Subtract,
-        CSG_Intersect,
-        CSG_Deintersect,
-    } csg;
-
+    unsigned int csg;
     unsigned int flags;
     unsigned int poly_flags;
     unsigned int colour;
@@ -246,13 +277,8 @@ int ParseInteger(void) {
 }
 
 float ParseVectorCoordinate(void) {
-    float f = strtof(t3d.cur_pos, (char**)(&t3d.cur_pos));
+    float f = strtof(t3d.cur_pos, &t3d.cur_pos);
     if (*t3d.cur_pos == ',') t3d.cur_pos++;
-
-#ifdef DEBUG_PARSER /* debug */
-    printf("read coord %f\n", f);
-#endif
-
     return f;
 }
 
@@ -314,6 +340,9 @@ bool ReadField(const char *prop) {
     size_t len = strlen(prop);
     if(pl_strncasecmp(t3d.cur_pos, prop, len) == 0) {
         t3d.cur_pos += len;
+        SkipSpaces();
+        if(*t3d.cur_pos == '=') t3d.cur_pos++;
+        SkipSpaces();
         return true;
     }
 
@@ -479,7 +508,8 @@ void ReadPolygon(void) {
             continue;
         }
 
-        if(ReadVectorField("Vertex", &t3d.cur_brush->cur_poly->vertices[cur_vertex++])) {
+        if(ReadVectorField("Vertex", &t3d.cur_brush->cur_poly->vertices[cur_vertex])) {
+            cur_vertex++;
             continue;
         }
 
@@ -532,7 +562,7 @@ void ReadMap(void) {
             continue;
         }
 
-        if(ReadPropertyInteger("Brushes", (int*) &t3d.num_brushes)) {
+        if(ReadPropertyInteger("Brushes", (int*) &t3d.map.num_brushes)) {
             continue;
         }
 
@@ -578,6 +608,13 @@ void ReadActor(void) {
 
         if(ChunkStart()) {
             ReadChunk();
+            continue;
+        }
+
+        if(ReadVectorField("Location", &t3d.cur_actor->location)) {
+#ifdef DEBUG_PARSER
+            PrintVector(t3d.cur_actor->location);
+#endif
             continue;
         }
 
@@ -754,19 +791,37 @@ void WriteMap(const char *path) {
 
     /* write out the world spawn */
 
+    fprintf(fp, "//\n");
+    fprintf(fp, "// generated with t3d2map v" VERSION "\n");
+    fprintf(fp, "//\n");
+
     fprintf(fp, "{\n");
     switch(startup_format) {
         default:
         case MAP_FORMAT_IDT2: {
-            WriteField(" classname", "worldspawn");
-            WriteField(" wad", "/gfx/base.wad");
-            WriteField(" worldtype", "0");
+            WriteField("classname", "worldspawn");
+            WriteField("wad", "/gfx/base.wad");
+            WriteField("worldtype", "0");
         } break;
     }
 
-    printf("writing %d brushes...\n", t3d.num_brushes);
-    for(unsigned int i = 0; i < t3d.num_brushes; ++i) {
-        fprintf(fp, " {\n");
+    unsigned int num_brushes = t3d.map.num_brushes;
+    if(num_brushes == 0) {
+        if(t3d.num_brushes == 0) {
+            printf("error: no brushes from t3d!\n");
+            exit(EXIT_FAILURE);
+        }
+        num_brushes = t3d.num_brushes - 1;
+    }
+
+    printf("writing %d brushes...\n", num_brushes);
+    for(unsigned int i = 0; i < num_brushes; ++i) {
+        if(startup_add && t3d.brushes[i].csg != CSG_Add) {
+            continue;
+        }
+
+        fprintf(fp, "// brush %d\n", i);
+        fprintf(fp, "{\n");
 
 #ifdef DEBUG_PARSER
         printf("brush %d\n", i);
@@ -777,7 +832,7 @@ void WriteMap(const char *path) {
         for(unsigned int j = 0; j < t3d.brushes[i].num_poly; ++j) {
             Polygon *cur_face = &t3d.brushes[i].poly_list[j];
 
-            fprintf(fp, "  ( %d %d %d ) ( %d %d %d ) ( %d %d %d ) %s 0 0 0 0 0\n",
+            fprintf(fp, "( %d %d %d ) ( %d %d %d ) ( %d %d %d ) %s 0 0 0 1 1\n",
                     (int) cur_face->vertices[0].x, (int) cur_face->vertices[0].y, (int) cur_face->vertices[0].z,
                     (int) cur_face->vertices[1].x, (int) cur_face->vertices[1].y, (int) cur_face->vertices[1].z,
                     (int) cur_face->vertices[2].x, (int) cur_face->vertices[2].y, (int) cur_face->vertices[2].z,
@@ -789,25 +844,35 @@ void WriteMap(const char *path) {
             printf("  texture: %s\n", cur_face->texture);
             printf("  group:   %s\n", cur_face->group);
             printf("  item:    %s\n", cur_face->item);
+            for(unsigned int k = 0; k < 4; ++k) {
+                printf("  vector %d (%d %d %d)\n",
+                       k,
+                       (int) cur_face->vertices[k].x,
+                       (int) cur_face->vertices[k].y,
+                       (int) cur_face->vertices[k].z
+                );
+            }
 #endif
         }
 
-        fprintf(fp, " }\n");
+        fprintf(fp, "}\n");
     }
 
     fprintf(fp, "}\n");
 
-    for(unsigned int i = 0; i < t3d.num_actors; ++i) {
-        fprintf(fp, "{\n");
+    if(t3d.num_actors > 0) {
+        for (unsigned int i = 0; i < (t3d.num_actors - 1); ++i) {
+            fprintf(fp, "{\n");
 
-        WriteField(" classname", GetEntityForActor(&t3d.actors[i]));
-        WriteVector(" origin", t3d.actors[i].position);
+            WriteField("classname", GetEntityForActor(&t3d.actors[i]));
+            WriteVector("origin", t3d.actors[i].location);
 
-        if(pl_strncasecmp(t3d.actors[i].class, "light", 5) == 0) {
-            WriteField(" light", "255");
+            if (pl_strncasecmp(t3d.actors[i].class, "light", 5) == 0) {
+                WriteField("light", "255");
+            }
+
+            fprintf(fp, "}\n");
         }
-
-        fprintf(fp, "}\n");
     }
 }
 
@@ -842,6 +907,12 @@ int main(int argc, char **argv) {
                 "-actors",
                 &startup_actors, NULL,
                 "retain original actor names for entities"
+            },
+
+            {
+                "-add",
+                &startup_add, NULL,
+                "only additive geometry"
             },
 
             {NULL, NULL}
