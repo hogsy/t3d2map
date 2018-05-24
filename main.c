@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <assert.h>
 
 #include <PL/platform_filesystem.h>
 
@@ -170,9 +171,11 @@ typedef struct Polygon { /* i 'ssa face >:I */
     char texture[64];
     char group[16];
 
-    int link;
+    /* T3D spec specifies that we're not guaranteed four vertices
+     * so, while I haven't seen a case of this, we will respect it */
+    UVector vertices[32];
+    unsigned int num_vertices;
 
-    UVector vertices[4];
     UVector u;
     UVector v;
 
@@ -251,7 +254,20 @@ void ParseString(char *out) {
 
 void ParseNext(void) {
     ParseBlock() {
-        if (*t3d.cur_pos == '\n' || *t3d.cur_pos == '\r' || *t3d.cur_pos == '\t') {
+        if (*t3d.cur_pos == '\n' || *t3d.cur_pos == '\r') {
+            if(t3d.cur_pos[0] == '\r' && t3d.cur_pos[1] == '\n') { /* LF */
+                t3d.cur_line++;
+                t3d.cur_pos += 2;
+                continue;
+            } else {
+                printf("funny line ending... blurgh!\n");
+            }
+
+            t3d.cur_pos++;
+            continue;
+        }
+
+        if(*t3d.cur_pos == '\t') {
             t3d.cur_pos++;
             continue;
         }
@@ -273,7 +289,7 @@ void ParseNext(void) {
 int ParseInteger(void) {
     char n[4];
     ParseString(n);
-    return (atoi(n));
+    return atoi(n);
 }
 
 float ParseVectorCoordinate(void) {
@@ -464,10 +480,6 @@ void ReadPolygon(void) {
             continue;
         }
 
-        if(ReadPropertyInteger("Link", &t3d.cur_brush->cur_poly->link)) {
-            continue;
-        }
-
         if(ReadPropertyString("Texture", t3d.cur_brush->cur_poly->texture)) {
             continue;
         }
@@ -476,6 +488,8 @@ void ReadPolygon(void) {
             continue;
         }
 
+        /* T3D spec suggests to ignore 'link' property, so we shall */
+
         SkipProperty();
     }
 
@@ -483,7 +497,6 @@ void ReadPolygon(void) {
         strncpy(t3d.cur_brush->cur_poly->texture, "none", sizeof(t3d.cur_brush->cur_poly->texture));
     }
 
-    unsigned int cur_vertex = 0;
     ParseBlock() {
         ParseNext();
 
@@ -508,8 +521,8 @@ void ReadPolygon(void) {
             continue;
         }
 
-        if(ReadVectorField("Vertex", &t3d.cur_brush->cur_poly->vertices[cur_vertex])) {
-            cur_vertex++;
+        if(ReadVectorField("Vertex", &t3d.cur_brush->cur_poly->vertices[t3d.cur_brush->cur_poly->num_vertices])) {
+            t3d.cur_brush->cur_poly->num_vertices++;
             continue;
         }
 
@@ -972,7 +985,14 @@ int main(int argc, char **argv) {
         WriteMap(out_path);
     }
 
-    printf("done!\n");
+    printf("done!\n\n");
+
+    printf("========================================\n");
+    printf(" STATISTICS\n");
+    printf("   brushes = %d\n", t3d.num_brushes);
+    printf("   actors  = %d\n", t3d.num_actors);
+    printf("   lines   = %d\n", t3d.cur_line);
+    printf("========================================\n");
 
     return EXIT_SUCCESS;
 }
