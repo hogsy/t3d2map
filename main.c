@@ -4,6 +4,7 @@
 #include <assert.h>
 
 #include <PL/platform_filesystem.h>
+#include <PL/platform_math.h>
 
 #define VERSION "0.01"
 
@@ -59,26 +60,6 @@ enum {
     CTX_POLYLIST,
     CTX_POLYGON,
 };
-
-/* id Tech types */
-
-typedef struct IVector {
-    int x, y, z;
-} IVector;
-
-/* UE types */
-
-typedef struct UVector {
-    float x, y, z;
-} UVector;
-
-typedef struct UColor {
-    char r, g, b, a;
-} UColor;
-
-void PrintVector(UVector vector) {
-    printf("vector %f %f %f\n", vector.x, vector.y, vector.z);
-}
 
 /****************************
  * Actors
@@ -136,7 +117,7 @@ typedef struct Actor {
     char class[64];
     unsigned int class_i;
 
-    UVector location;
+    PLVector3 location;
 
     union {
         struct {
@@ -173,13 +154,13 @@ typedef struct Polygon { /* i 'ssa face >:I */
 
     /* T3D spec specifies that we're not guaranteed four vertices
      * so, while I haven't seen a case of this, we will respect it */
-    UVector vertices[32];
+    PLVector3 vertices[32];
     unsigned int num_vertices;
 
-    UVector u;
-    UVector v;
+    PLVector3 u;
+    PLVector3 v;
 
-    UVector origin;
+    PLVector3 origin;
 } Polygon;
 
 enum {
@@ -197,10 +178,10 @@ typedef struct Brush { /* i 'ssa primitive >:I */
     Polygon *cur_poly;
     unsigned int num_poly;
 
-    UVector location;
-    UVector rotation;
-    UVector pre_pivot;
-    UVector post_pivot;
+    PLVector3 location;
+    PLVector3 rotation;
+    PLVector3 pre_pivot;
+    PLVector3 post_pivot;
 
     unsigned int csg;
     unsigned int flags;
@@ -298,10 +279,10 @@ float ParseVectorCoordinate(void) {
     return f;
 }
 
-UVector ParseVector(void) {
+PLVector3 ParseVector(void) {
     if(*t3d.cur_pos == '(') t3d.cur_pos++;
 
-    UVector vector = {
+    PLVector3 vector = {
         ParseVectorCoordinate(),
         ParseVectorCoordinate(),
         ParseVectorCoordinate()
@@ -365,7 +346,7 @@ bool ReadField(const char *prop) {
     return false;
 }
 
-bool ReadVectorField(const char *prop, UVector *vector) {
+bool ReadVectorField(const char *prop, PLVector3 *vector) {
     if(!ReadField(prop)) {
         return false;
     }
@@ -626,7 +607,7 @@ void ReadActor(void) {
 
         if(ReadVectorField("Location", &t3d.cur_actor->location)) {
 #ifdef DEBUG_PARSER
-            PrintVector(t3d.cur_actor->location);
+            printf("vector %s\n", plPrintVector3(t3d.cur_actor->location));
 #endif
             continue;
         }
