@@ -148,9 +148,9 @@ typedef struct Actor {
 /****************************/
 
 typedef struct Polygon { /* i 'ssa face >:I */
-    char item[32];
-    char texture[64];
-    char group[16];
+    char item[64];
+    char texture[128];
+    char group[64];
 
     /* T3D spec specifies that we're not guaranteed four vertices
      * so, while I haven't seen a case of this, we will respect it */
@@ -375,6 +375,10 @@ bool ReadProperty(const char *parm) {
 
 bool ReadPropertyString(const char *parm, char *out) {
     if(ReadProperty(parm)) {
+#ifdef DEBUG_PARSER
+        printf("prop=%s\n", parm);
+#endif
+
         ParseString(out);
         return true;
     }
@@ -781,7 +785,7 @@ void WriteMap(const char *path) {
     }
 
 #define WriteField(a, b)  fprintf(fp, "\"%s\" \"%s\"\n", (a), (b))
-#define WriteVector(a, b) fprintf(fp, "\"%s\" \"%d %d %d\"\n", (a), (int)(b).x, (int)(b).y, (int)(b).z);
+#define WriteVector(a, b) fprintf(fp, "\"%s\" \"%d %d %d\"\n", (a), (int)(b).x, (int)(b).z, (int)(b).y);
 
     /* write out the world spawn */
 
@@ -810,9 +814,9 @@ void WriteMap(const char *path) {
 
     printf("writing %d brushes...\n", num_brushes);
     for(unsigned int i = 0; i < num_brushes; ++i) {
-        if(startup_add && t3d.brushes[i].csg != CSG_Add) {
-            continue;
-        }
+        //if(startup_add && t3d.brushes[i].csg != CSG_Add) {
+         //   continue;
+        //}
 
         fprintf(fp, "// brush %d\n", i);
         fprintf(fp, "{\n");
@@ -823,13 +827,31 @@ void WriteMap(const char *path) {
         printf(" csg:  %d\n", t3d.brushes[i].csg);
 #endif
 
+        if(t3d.brushes[i].num_poly < 4) {
+            printf("warning: invalid number of polygons to produce brush (%d), skipping!\n", t3d.brushes[i].num_poly);
+            continue;
+        }
+
         for(unsigned int j = 0; j < t3d.brushes[i].num_poly; ++j) {
             Polygon *cur_face = &t3d.brushes[i].poly_list[j];
+#if 0
+            if(j == 0) {
+                /* first brush coords determine initial location of brush? */
+                plAddVector3(&cur_face->vertices[0], t3d.brushes[i].location);
+                plAddVector3(&cur_face->vertices[1], t3d.brushes[i].location);
+                plAddVector3(&cur_face->vertices[2], t3d.brushes[i].location);
+
+            }
+#else
+            plAddVector3(&cur_face->vertices[0], t3d.brushes[i].location);
+            plAddVector3(&cur_face->vertices[1], t3d.brushes[i].location);
+            plAddVector3(&cur_face->vertices[2], t3d.brushes[i].location);
+#endif
 
             fprintf(fp, "( %d %d %d ) ( %d %d %d ) ( %d %d %d ) %s 0 0 0 1 1\n",
-                    (int) cur_face->vertices[0].x, (int) cur_face->vertices[0].y, (int) cur_face->vertices[0].z,
-                    (int) cur_face->vertices[1].x, (int) cur_face->vertices[1].y, (int) cur_face->vertices[1].z,
-                    (int) cur_face->vertices[2].x, (int) cur_face->vertices[2].y, (int) cur_face->vertices[2].z,
+                    (int) cur_face->vertices[0].x, (int) cur_face->vertices[0].z, (int) cur_face->vertices[0].y,
+                    (int) cur_face->vertices[1].x, (int) cur_face->vertices[1].z, (int) cur_face->vertices[1].y,
+                    (int) cur_face->vertices[2].x, (int) cur_face->vertices[2].z, (int) cur_face->vertices[2].y,
                     cur_face->texture
             );
 
@@ -842,8 +864,8 @@ void WriteMap(const char *path) {
                 printf("  vector %d (%d %d %d)\n",
                        k,
                        (int) cur_face->vertices[k].x,
-                       (int) cur_face->vertices[k].y,
-                       (int) cur_face->vertices[k].z
+                       (int) cur_face->vertices[k].z,
+                       (int) cur_face->vertices[k].y
                 );
             }
 #endif
