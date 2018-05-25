@@ -47,7 +47,7 @@ void GameCommand(const char *parm) {
 #define MAX_MAP_BRUSHES     56875
 #define MAX_MAP_ENTITIES    4096
 
-#define MAX_BRUSH_FACES 32
+#define MAX_BRUSH_FACES 128
 
 enum {
     CTX_MAP,
@@ -174,7 +174,7 @@ enum {
 typedef struct Brush { /* i 'ssa primitive >:I */
     char name[32];
 
-    Polygon poly_list[MAX_BRUSH_FACES];
+    Polygon *poly_list;
     Polygon *cur_poly;
     unsigned int num_poly;
 
@@ -520,8 +520,6 @@ void ReadPolygon(void) {
 void ReadPolyList(void) {
     print_heading("PolyList");
 
-    t3d.cur_brush->cur_poly = &t3d.cur_brush->poly_list[0];
-
     ParseLine() {
         if(ReadPropertyInteger("Num", (int *) &t3d.cur_brush->num_poly)) {
             continue;
@@ -534,6 +532,13 @@ void ReadPolyList(void) {
         printf("invalid number of polygons in polylist!\n");
         exit(EXIT_FAILURE);
     }
+
+    if((t3d.cur_brush->poly_list = calloc(t3d.cur_brush->num_poly, sizeof(Polygon))) == NULL) {
+        printf("error: failed to allocate %d polygons, aborting!\n", t3d.cur_brush->num_poly);
+        exit(EXIT_FAILURE);
+    }
+
+    t3d.cur_brush->cur_poly = &t3d.cur_brush->poly_list[0];
 
     ParseBlock() {
         ParseNext();
@@ -814,12 +819,9 @@ void WriteMap(const char *path) {
 
     printf("writing %d brushes...\n", num_brushes);
     for(unsigned int i = 0; i < num_brushes; ++i) {
-        //if(startup_add && t3d.brushes[i].csg != CSG_Add) {
-         //   continue;
-        //}
-
-        fprintf(fp, "// brush %d\n", i);
-        fprintf(fp, "{\n");
+        if(startup_add && t3d.brushes[i].csg != CSG_Add) {
+            continue;
+        }
 
 #ifdef DEBUG_PARSER
         printf("brush %d\n", i);
@@ -831,6 +833,9 @@ void WriteMap(const char *path) {
             printf("warning: invalid number of polygons to produce brush (%d), skipping!\n", t3d.brushes[i].num_poly);
             continue;
         }
+
+        fprintf(fp, "// brush %d\n", i);
+        fprintf(fp, "{\n");
 
         for(unsigned int j = 0; j < t3d.brushes[i].num_poly; ++j) {
             Polygon *cur_face = &t3d.brushes[i].poly_list[j];
