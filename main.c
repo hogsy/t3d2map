@@ -47,7 +47,7 @@ void GameCommand(const char *parm) {
 #define MAX_MAP_BRUSHES     56875
 #define MAX_MAP_ENTITIES    4096
 
-#define MAX_BRUSH_FACES 128
+#define MAX_BRUSH_FACES 4096
 
 enum {
     CTX_MAP,
@@ -78,6 +78,7 @@ enum {
     ACT_Sparks,         /* env_spark */
 
     ACT_LevelSummary,   /* worldspawn */
+    ACT_LevelInfo,      /* worldspawn */
 
     ACT_Unknown
 };
@@ -95,6 +96,7 @@ ActorDef actor_definitions[]={
         {"Spotlight",       ACT_Spotlight},
         {"Sparks",          ACT_Sparks},
         {"LevelSummary",    ACT_LevelSummary},
+        {"LevelInfo",       ACT_LevelInfo},
 
         {NULL}
 };
@@ -114,12 +116,21 @@ unsigned int GetActorIdentification(const char *name) {
 }
 
 typedef struct Actor {
+    char name[64];
+
     char class[64];
     unsigned int class_i;
 
     PLVector3 location;
 
     union {
+        struct {
+            char effect[32];
+
+            unsigned int brightness;    /* ?? */
+            unsigned int radius;        /* R G B RAD */
+        } Light;
+
         struct {
             float time;
             float day_fraction;
@@ -141,7 +152,11 @@ typedef struct Actor {
 
             int recommended_enemies;
             int recommended_teammates;
-        } LevelSummary;
+        } LevelSummary; /* + LevelInfo */
+
+        struct {
+            char csg[32];
+        } Brush;
     };
 } Actor;
 
@@ -177,6 +192,7 @@ typedef struct Brush { /* i 'ssa primitive >:I */
     Polygon *poly_list;
     Polygon *cur_poly;
     unsigned int num_poly;
+    unsigned int max_poly;
 
     PLVector3 location;
     PLVector3 rotation;
@@ -274,6 +290,7 @@ int ParseInteger(void) {
 }
 
 float ParseVectorCoordinate(void) {
+    while(*t3d.cur_pos != '+' && *t3d.cur_pos != '-' && isdigit(*t3d.cur_pos) == 0) t3d.cur_pos++;
     float f = strtof(t3d.cur_pos, &t3d.cur_pos);
     if (*t3d.cur_pos == ',') t3d.cur_pos++;
     return f;
@@ -515,25 +532,30 @@ void ReadPolygon(void) {
     }
 
     t3d.cur_brush->cur_poly++;
+    t3d.cur_brush->num_poly++;
+    if(t3d.cur_brush->num_poly > t3d.cur_brush->max_poly) {
+        printf("error: invalid number of polygons for brush (%d / %d), aborting!\n",
+               t3d.cur_brush->num_poly, t3d.cur_brush->max_poly);
+        exit(EXIT_FAILURE);
+    }
 }
 
 void ReadPolyList(void) {
     print_heading("PolyList");
 
     ParseLine() {
-        if(ReadPropertyInteger("Num", (int *) &t3d.cur_brush->num_poly)) {
+        if(ReadPropertyInteger("Num", (int *) &t3d.cur_brush->max_poly)) {
             continue;
         }
 
         SkipProperty();
     }
 
-    if(t3d.cur_brush->num_poly == 0) {
-        printf("invalid number of polygons in polylist!\n");
-        exit(EXIT_FAILURE);
+    if(t3d.cur_brush->max_poly == 0) {
+        t3d.cur_brush->max_poly = MAX_BRUSH_FACES;
     }
 
-    if((t3d.cur_brush->poly_list = calloc(t3d.cur_brush->num_poly, sizeof(Polygon))) == NULL) {
+    if((t3d.cur_brush->poly_list = calloc(t3d.cur_brush->max_poly, sizeof(Polygon))) == NULL) {
         printf("error: failed to allocate %d polygons, aborting!\n", t3d.cur_brush->num_poly);
         exit(EXIT_FAILURE);
     }
@@ -553,6 +575,17 @@ void ReadPolyList(void) {
         }
 
         SkipLine();
+    }
+
+    if(t3d.cur_brush->num_poly < t3d.cur_brush->max_poly) {
+        printf("shrinking polylist (%d < %d)... ", t3d.cur_brush->num_poly, t3d.cur_brush->max_poly);
+        if((t3d.cur_brush->poly_list = realloc(t3d.cur_brush->poly_list, t3d.cur_brush->num_poly * sizeof(Polygon)))
+           == NULL) {
+            printf("error: failed to shrink polylist down!\n");
+            exit(EXIT_FAILURE);
+        }
+        t3d.cur_brush->max_poly = t3d.cur_brush->num_poly;
+        printf("done!\n");
     }
 }
 
@@ -599,6 +632,10 @@ void ReadActor(void) {
             continue;
         }
 
+        if(ReadPropertyString("Name", t3d.cur_actor->name)) {
+            continue;
+        }
+
         SkipProperty();
     }
 
@@ -621,6 +658,19 @@ void ReadActor(void) {
             continue;
         }
 
+        switch(t3d.cur_actor->class_i) {
+            default:break;
+
+            case ACT_LevelSummary:break;
+            case ACT_Spotlight:break;
+            case ACT_Light:break;
+            case ACT_Brush: {
+                if(ReadPropertyString("CsgOper", t3d.cur_actor->Brush.csg)) {
+                    continue;
+                }
+            } break;
+        }
+
         SkipLine();
     }
 
@@ -639,6 +689,25 @@ void ReadBrush(void) {
         }
 
         SkipProperty();
+    }
+
+    if((t3d.cur_chunk > 0) && (t3d.chunks[t3d.cur_chunk - 1].context == CTX_ACTOR)) {
+        if (t3d.cur_actor->class_i == ACT_Brush) {
+            t3d.cur_brush->location = t3d.cur_actor->location;
+            if (pl_strncasecmp(t3d.cur_actor->Brush.csg, "CSG_Subtract", 12) == 0) {
+                t3d.cur_brush->csg = CSG_Subtract;
+            } else if (pl_strncasecmp(t3d.cur_actor->Brush.csg, "CSG_Active", 10) == 0) {
+                t3d.cur_brush->csg = CSG_Active;
+            } else if (pl_strncasecmp(t3d.cur_actor->Brush.csg, "CSG_Add", 7) == 0) {
+                t3d.cur_brush->csg = CSG_Add;
+            } else if (pl_strncasecmp(t3d.cur_actor->Brush.csg, "CSG_Deintersect", 15) == 0) {
+                t3d.cur_brush->csg = CSG_Deintersect;
+            } else if (pl_strncasecmp(t3d.cur_actor->Brush.csg, "CSG_Intersect", 13) == 0) {
+                t3d.cur_brush->csg = CSG_Intersect;
+            }
+        } else {
+            printf("warning: previous chunk was an actor but not of a brush class!\n");
+        }
     }
 
     ParseBlock() {
@@ -790,7 +859,7 @@ void WriteMap(const char *path) {
     }
 
 #define WriteField(a, b)  fprintf(fp, "\"%s\" \"%s\"\n", (a), (b))
-#define WriteVector(a, b) fprintf(fp, "\"%s\" \"%d %d %d\"\n", (a), (int)(b).x, (int)(b).z, (int)(b).y);
+#define WriteVector(a, b) fprintf(fp, "\"%s\" \"%d %d %d\"\n", (a), (int)(b).z, (int)(b).y, (int)(b).x);
 
     /* write out the world spawn */
 
@@ -825,8 +894,9 @@ void WriteMap(const char *path) {
 
 #ifdef DEBUG_PARSER
         printf("brush %d\n", i);
-        printf(" name: %s\n", t3d.brushes[i].name);
-        printf(" csg:  %d\n", t3d.brushes[i].csg);
+        printf(" name:     %s\n", t3d.brushes[i].name);
+        printf(" csg:      %d\n", t3d.brushes[i].csg);
+        printf(" location: %s\n", plPrintVector3(t3d.brushes[i].location));
 #endif
 
         if(t3d.brushes[i].num_poly < 4) {
@@ -839,39 +909,30 @@ void WriteMap(const char *path) {
 
         for(unsigned int j = 0; j < t3d.brushes[i].num_poly; ++j) {
             Polygon *cur_face = &t3d.brushes[i].poly_list[j];
-#if 0
-            if(j == 0) {
-                /* first brush coords determine initial location of brush? */
-                plAddVector3(&cur_face->vertices[0], t3d.brushes[i].location);
-                plAddVector3(&cur_face->vertices[1], t3d.brushes[i].location);
-                plAddVector3(&cur_face->vertices[2], t3d.brushes[i].location);
 
+            /* todo: may need to switch these coords around depending on output... */
+
+            float x[3], y[3], z[3];
+            for(unsigned int k = 0; k < 3; ++k) {
+                x[k] = cur_face->vertices[k].z + t3d.brushes[i].location.z;
+                y[k] = cur_face->vertices[k].y + t3d.brushes[i].location.y;
+                z[k] = cur_face->vertices[k].x + t3d.brushes[i].location.x;
             }
-#else
-            plAddVector3(&cur_face->vertices[0], t3d.brushes[i].location);
-            plAddVector3(&cur_face->vertices[1], t3d.brushes[i].location);
-            plAddVector3(&cur_face->vertices[2], t3d.brushes[i].location);
-#endif
 
             fprintf(fp, "( %d %d %d ) ( %d %d %d ) ( %d %d %d ) %s 0 0 0 1 1\n",
-                    (int) cur_face->vertices[0].x, (int) cur_face->vertices[0].z, (int) cur_face->vertices[0].y,
-                    (int) cur_face->vertices[1].x, (int) cur_face->vertices[1].z, (int) cur_face->vertices[1].y,
-                    (int) cur_face->vertices[2].x, (int) cur_face->vertices[2].z, (int) cur_face->vertices[2].y,
+                    (int) x[0], (int) y[0], (int) z[0],
+                    (int) x[1], (int) y[1], (int) z[1],
+                    (int) x[2], (int) y[2], (int) z[2],
                     cur_face->texture
             );
 
-#ifdef DEBUG_PARSER
+#if 1
             printf(" poly %d\n", j);
             printf("  texture: %s\n", cur_face->texture);
             printf("  group:   %s\n", cur_face->group);
             printf("  item:    %s\n", cur_face->item);
             for(unsigned int k = 0; k < 4; ++k) {
-                printf("  vector %d (%d %d %d)\n",
-                       k,
-                       (int) cur_face->vertices[k].x,
-                       (int) cur_face->vertices[k].z,
-                       (int) cur_face->vertices[k].y
-                );
+                printf("  vector %d (%s)\n", k, plPrintVector3(cur_face->vertices[k]));
             }
 #endif
         }
@@ -996,10 +1057,9 @@ int main(int argc, char **argv) {
     printf("done!\n\n");
 
     printf("========================================\n");
-    printf(" STATISTICS\n");
+    printf(" STATISTICS FOR %s\n", pl_strtoupper(in_path));
     printf("   brushes = %d\n", t3d.num_brushes);
     printf("   actors  = %d\n", t3d.num_actors);
-    printf("   lines   = %d\n", t3d.cur_line);
     printf("========================================\n");
 
     return EXIT_SUCCESS;
