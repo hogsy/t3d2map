@@ -11,13 +11,15 @@
 /* debug flags */
 #define DEBUG_PARSER
 
-enum {
+enum { /* do NOT change the ordering of these!!! */
     MAP_FORMAT_IDT2,    /* Quake, Quake 2 */
     MAP_FORMAT_IDT3,    /* Quake 3 */
     MAP_FORMAT_IDT4,    /* Doom 3 */
 
     MAP_FORMAT_GSRC,    /* Half-Life */
     MAP_FORMAT_SRC,     /* Half-Life 2 */
+
+    MAX_MAP_FORMATS
 };
 
 unsigned int startup_format = MAP_FORMAT_IDT2;
@@ -25,6 +27,7 @@ unsigned int startup_format = MAP_FORMAT_IDT2;
 bool startup_test = false;
 bool startup_actors = false;
 bool startup_add = false;
+bool startup_sub = false;
 
 void GameCommand(const char *parm) {
     if(strncmp("idt2", parm, 4) == 0) { /* this is the default */
@@ -39,6 +42,41 @@ void GameCommand(const char *parm) {
         startup_format = MAP_FORMAT_GSRC;
     } else if(strncmp("src", parm, 3) == 0) {
         startup_format = MAP_FORMAT_SRC;
+    }
+}
+
+/**************************************************/
+
+/* https://stackoverflow.com/questions/3018313/algorithm-to-convert-rgb-to-hsv-and-hsv-to-rgb-in-range-0-255-for-both */
+void ConvertHSV(unsigned char h, unsigned char s, unsigned char v,
+                unsigned char *r, unsigned char *g, unsigned char *b) {
+    if(s == 0) {
+        if(v == 0) {
+            *r = 255;
+            *g = 255;
+            *b = 255;
+        } else {
+            *r = v;
+            *g = v;
+            *b = v;
+        }
+        return;
+    }
+
+    unsigned char region = (unsigned char) (h / 43);
+    unsigned char remainder = (unsigned char) ((h - (region * 43)) * 6);
+
+    unsigned char p = (unsigned char) ((v * (255 - s)) >> 8);
+    unsigned char q = (unsigned char) ((v * (255 - ((s * remainder) >> 8))) >> 8);
+    unsigned char t = (unsigned char) ((v * (255 - ((s * (255 - remainder)) >> 8))) >> 8);
+
+    switch(region) {
+        case 0:     *r = v; *g = t; *b = p; break;
+        case 1:     *r = q; *g = v; *b = p; break;
+        case 2:     *r = p; *g = v; *b = t; break;
+        case 3:     *r = p; *g = q; *b = v; break;
+        case 4:     *r = t; *g = p; *b = v; break;
+        default:    *r = v; *g = p; *b = q; break;
     }
 }
 
@@ -67,6 +105,7 @@ enum {
 
 enum {
     ACT_Brush,          /* */
+    ACT_Mover,          /* func_wall */
 
     ACT_AmbientSound,   /* */
 
@@ -80,46 +119,49 @@ enum {
     ACT_LevelSummary,   /* worldspawn */
     ACT_LevelInfo,      /* worldspawn */
 
+    ACT_PathNode,
+
+    /* UT99 */
+    ACT_HealthVial,     /* item_battery */
+
     ACT_Unknown
 };
+
+#define StandardEntityName(a)                   { (a), (a), (a), (a), (a) }
+#define EntityName(ID2, ID3, ID4, GSRC, SRC)    { (ID2), (ID3), (ID4), (GSRC), (SRC) }
 
 typedef struct ActorDef {
     const char *name;
     unsigned int id;
-    void*data;
+
+    const char *targets[MAX_MAP_FORMATS];
 } ActorDef;
 ActorDef actor_definitions[]={
         {"Brush",           ACT_Brush},
+        {"Mover",           ACT_Mover},
         {"AmbientSound",    ACT_AmbientSound},
-        {"PlayerStart",     ACT_PlayerStart},
-        {"Light",           ACT_Light},
+
+        { "PlayerStart",    ACT_PlayerStart,    StandardEntityName("info_player_start") },
+        { "Light",          ACT_Light,          StandardEntityName("light") },
+
+        { "PathNode",       ACT_PathNode,       EntityName(NULL, NULL, NULL, "info_node", "info_node") },
+
         {"Spotlight",       ACT_Spotlight},
         {"Sparks",          ACT_Sparks},
         {"LevelSummary",    ACT_LevelSummary},
         {"LevelInfo",       ACT_LevelInfo},
 
+        /* UT99 */
+        { "HealthVial",     ACT_HealthVial,     EntityName(NULL, NULL, NULL, "item_battery", NULL) },
+
         {NULL}
 };
 
-unsigned int GetActorIdentification(const char *name) {
-    for(unsigned int i = 0; i < plArrayElements(actor_definitions); ++i) {
-        if(actor_definitions[i].name == NULL) {
-            break;
-        }
-
-        if(pl_strncasecmp(name, actor_definitions[i].name, sizeof(name)) == 0) {
-            return actor_definitions[i].id;
-        }
-    }
-
-    return ACT_Unknown;
-}
-
 typedef struct Actor {
     char name[64];
-
     char class[64];
-    unsigned int class_i;
+
+    ActorDef *class_index;
 
     PLVector3 location;
 
@@ -127,8 +169,12 @@ typedef struct Actor {
         struct {
             char effect[32];
 
-            unsigned int brightness;    /* ?? */
-            unsigned int radius;        /* R G B RAD */
+            /* HSV                                 */
+            unsigned int hue;           /* 0 - 255 */
+            unsigned int saturation;    /* 0 - 255 */
+            unsigned int brightness;    /* 0 - 255 */
+
+            unsigned int radius;
         } Light;
 
         struct {
@@ -159,6 +205,39 @@ typedef struct Actor {
         } Brush;
     };
 } Actor;
+
+ActorDef *GetActorIdentification(const char *name) {
+    for(unsigned int i = 0; i < plArrayElements(actor_definitions); ++i) {
+        if(actor_definitions[i].name == NULL) {
+            break;
+        }
+
+        if(pl_strncasecmp(name, actor_definitions[i].name, sizeof(name)) == 0) {
+            return &actor_definitions[i];
+        }
+    }
+
+    return &actor_definitions[ACT_Unknown];
+}
+
+const char *GetEntityForActor(Actor *actor) {
+    if(startup_actors || actor->class_index->id == ACT_Unknown) {
+        if(actor->class[0] == '\0' || actor->class[0] == ' ') {
+            printf("warning: invalid actor name, possibly failed to parse?\n");
+            return "unknown";
+        }
+        return &actor->class[0];
+    }
+
+    const char *target = actor->class_index->targets[startup_format];
+    if(target == NULL || target[0] == '\0') {
+        printf("warning: no entity target provided for actor \"%s\" in this mode, returning actor name instead!\n",
+               actor->class_index->name);
+        return &actor->class[0];
+    }
+
+    return target;
+}
 
 /****************************/
 
@@ -238,6 +317,10 @@ struct {
 #define ParseLine()     while(*t3d.cur_pos != '\0' && *t3d.cur_pos != '\n' && *t3d.cur_pos != '\r')
 
 void ParseString(char *out) {
+    SkipSpaces();
+    if(*t3d.cur_pos == '=') t3d.cur_pos++;
+    SkipSpaces();
+
     unsigned int i = 0;
     ParseBlock() {
         if(*t3d.cur_pos == ' ' || *t3d.cur_pos == '\n' || *t3d.cur_pos == '\r') {
@@ -628,7 +711,7 @@ void ReadActor(void) {
 
     ParseLine() {
         if(ReadPropertyString("Class", t3d.cur_actor->class)) {
-            t3d.cur_actor->class_i = GetActorIdentification(t3d.cur_actor->class);
+            t3d.cur_actor->class_index = GetActorIdentification(t3d.cur_actor->class);
             continue;
         }
 
@@ -652,18 +735,37 @@ void ReadActor(void) {
         }
 
         if(ReadVectorField("Location", &t3d.cur_actor->location)) {
-#ifdef DEBUG_PARSER
-            printf("vector %s\n", plPrintVector3(t3d.cur_actor->location));
-#endif
             continue;
         }
 
-        switch(t3d.cur_actor->class_i) {
+        switch(t3d.cur_actor->class_index->id) {
             default:break;
 
             case ACT_LevelSummary:break;
             case ACT_Spotlight:break;
-            case ACT_Light:break;
+
+            case ACT_Light: {
+                if(ReadPropertyString("LightEffect", t3d.cur_actor->Light.effect)) {
+                    continue;
+                }
+
+                if(ReadPropertyInteger("LightBrightness", (int *) &t3d.cur_actor->Light.brightness)) {
+                    continue;
+                }
+
+                if(ReadPropertyInteger("LightHue", (int *) &t3d.cur_actor->Light.hue)) {
+                    continue;
+                }
+
+                if(ReadPropertyInteger("LightRadius", (int *) &t3d.cur_actor->Light.radius)) {
+                    continue;
+                }
+
+                if(ReadPropertyInteger("LightSaturation", (int *) &t3d.cur_actor->Light.saturation)) {
+                    continue;
+                }
+            } break;
+
             case ACT_Brush: {
                 if(ReadPropertyString("CsgOper", t3d.cur_actor->Brush.csg)) {
                     continue;
@@ -692,7 +794,7 @@ void ReadBrush(void) {
     }
 
     if((t3d.cur_chunk > 0) && (t3d.chunks[t3d.cur_chunk - 1].context == CTX_ACTOR)) {
-        if (t3d.cur_actor->class_i == ACT_Brush) {
+        if (t3d.cur_actor->class_index->id == ACT_Brush || t3d.cur_actor->class_index->id == ACT_Mover) {
             t3d.cur_brush->location = t3d.cur_actor->location;
             if (pl_strncasecmp(t3d.cur_actor->Brush.csg, "CSG_Subtract", 12) == 0) {
                 t3d.cur_brush->csg = CSG_Subtract;
@@ -813,44 +915,6 @@ void ParseT3D(const char *path) {
     }
 }
 
-const char *GetEntityForActor(Actor *actor) {
-    if(startup_actors || actor->class_i == ACT_Unknown) {
-        if(actor->class[0] == '\0' || actor->class[0] == ' ') {
-            printf("warning: invalid actor name, possibly failed to parse?\n");
-            return "unknown";
-        }
-        return &actor->class[0];
-    }
-
-    switch(actor->class_i) {
-        default:break;
-
-        case ACT_Sparks: {
-            if(startup_format == MAP_FORMAT_SRC) {
-                return "env_spark";
-            }
-        } break;
-
-        case ACT_Light: {
-            return "light";
-        }
-
-        case ACT_Spotlight: {
-            if(startup_format == MAP_FORMAT_SRC) {
-                return "light_spot";
-            }
-
-            return "light";
-        }
-
-        case ACT_PlayerStart: {
-            return "info_player_start";
-        }
-    }
-
-    return &actor->class[0];
-}
-
 void WriteMap(const char *path) {
     FILE *fp = fopen(path, "w");
     if(fp == NULL) {
@@ -858,8 +922,8 @@ void WriteMap(const char *path) {
         exit(EXIT_FAILURE);
     }
 
-#define WriteField(a, b)  fprintf(fp, "\"%s\" \"%s\"\n", (a), (b))
-#define WriteVector(a, b) fprintf(fp, "\"%s\" \"%d %d %d\"\n", (a), (int)(b).z, (int)(b).y, (int)(b).x);
+#define WriteField(a, b)    fprintf(fp, "\"%s\" \"%s\"\n", (a), (b))
+#define WriteVector(a, b)   fprintf(fp, "\"%s\" \"%d %d %d\"\n", (a), (int)(b).y, (int)(b).x, (int)(b).z)
 
     /* write out the world spawn */
 
@@ -892,6 +956,10 @@ void WriteMap(const char *path) {
             continue;
         }
 
+        if(startup_sub && t3d.brushes[i].csg != CSG_Subtract) {
+            continue;
+        }
+
 #ifdef DEBUG_PARSER
         printf("brush %d\n", i);
         printf(" name:     %s\n", t3d.brushes[i].name);
@@ -914,9 +982,9 @@ void WriteMap(const char *path) {
 
             float x[3], y[3], z[3];
             for(unsigned int k = 0; k < 3; ++k) {
-                x[k] = cur_face->vertices[k].z + t3d.brushes[i].location.z;
-                y[k] = cur_face->vertices[k].y + t3d.brushes[i].location.y;
-                z[k] = cur_face->vertices[k].x + t3d.brushes[i].location.x;
+                x[k] = cur_face->vertices[k].y + t3d.brushes[i].location.y;
+                y[k] = cur_face->vertices[k].x + t3d.brushes[i].location.x;
+                z[k] = cur_face->vertices[k].z + t3d.brushes[i].location.z;
             }
 
             fprintf(fp, "( %d %d %d ) ( %d %d %d ) ( %d %d %d ) %s 0 0 0 1 1\n",
@@ -944,13 +1012,23 @@ void WriteMap(const char *path) {
 
     if(t3d.num_actors > 0) {
         for (unsigned int i = 0; i < (t3d.num_actors - 1); ++i) {
+            if(t3d.actors[i].class_index->id == ACT_Brush) {
+                continue;
+            }
+
             fprintf(fp, "{\n");
 
             WriteField("classname", GetEntityForActor(&t3d.actors[i]));
             WriteVector("origin", t3d.actors[i].location);
 
             if (pl_strncasecmp(t3d.actors[i].class, "light", 5) == 0) {
-                WriteField("light", "255");
+                unsigned char r, g, b;
+                ConvertHSV((unsigned char) t3d.actors[i].Light.hue,
+                           (unsigned char) t3d.actors[i].Light.saturation,
+                           (unsigned char) t3d.actors[i].Light.brightness,
+                           &r, &g, &b);
+                fprintf(fp, "\"light\" \"%d %d %d\"\n", r, g, b);
+
             }
 
             fprintf(fp, "}\n");
@@ -968,11 +1046,7 @@ int main(int argc, char **argv) {
         const char *description;
     } Argument;
     Argument launch_arguments[]= {
-            {
-                "-test",
-                &startup_test, NULL,
-                "if enabled, this will simply read the input and won't export anything"
-            },
+            { "-test", &startup_test, NULL, "if enabled, this will simply read the input and won't export anything" },
 
             {
                 "-game",
@@ -985,17 +1059,9 @@ int main(int argc, char **argv) {
                 " src  (Half-Life 2)"
             },
 
-            {
-                "-actors",
-                &startup_actors, NULL,
-                "retain original actor names for entities"
-            },
-
-            {
-                "-add",
-                &startup_add, NULL,
-                "only additive geometry"
-            },
+            { "-actors", &startup_actors, NULL, "retain original actor names for entities" },
+            { "-add", &startup_add, NULL, "only additive geometry" },
+            { "-sub", &startup_sub, NULL, "only subtractive geometry" },
 
             {NULL, NULL}
     };
