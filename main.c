@@ -876,18 +876,20 @@ void ParseT3D(const char *path) {
         exit(EXIT_FAILURE);
     }
 
-    FILE *fp = fopen(path, "r");
+    PLFile *fp = plOpenFile(path, false);
     if(fp == NULL) {
         printf("failed to read \"%s\", aborting!\n", path);
         exit(EXIT_FAILURE);
     }
 
     char *buf;
-    size_t length = plGetFileSize(path);
+    size_t length = plGetFileSize(fp);
     buf = malloc(length);
-    fread(buf, 1, length, fp);
+    if(plReadFile(fp, buf, 1, length) != length) {
+      printf("Failed to read entirety of T3D, expect faults!\n");
+    }
     buf[length] = '\0';
-    fclose(fp);
+    plCloseFile(fp);
 
     printf("success!\n");
     printf("parsing...\n");
@@ -964,7 +966,7 @@ void WriteMap(const char *path) {
         printf("brush %d\n", i);
         printf(" name:     %s\n", t3d.brushes[i].name);
         printf(" csg:      %d\n", t3d.brushes[i].csg);
-        printf(" location: %s\n", plPrintVector3(t3d.brushes[i].location));
+        printf(" location: %s\n", plPrintVector3(&t3d.brushes[i].location, pl_int_var));
 #endif
 
         if(t3d.brushes[i].num_poly < 4) {
@@ -1000,7 +1002,7 @@ void WriteMap(const char *path) {
             printf("  group:   %s\n", cur_face->group);
             printf("  item:    %s\n", cur_face->item);
             for(unsigned int k = 0; k < 4; ++k) {
-                printf("  vector %d (%s)\n", k, plPrintVector3(cur_face->vertices[k]));
+                printf("  vector %d (%s)\n", k, plPrintVector3(&cur_face->vertices[k], pl_int_var));
             }
 #endif
         }
@@ -1069,7 +1071,7 @@ int main(int argc, char **argv) {
     printf("t3d2map v" VERSION "\nDeveloped by Mark \"hogsy\" Sowden <markelswo@gmail.com>\n\n");
     if(argc < 2) {
         printf("\nusage:\n t3d2map <in> [out]\n");
-        for(unsigned int i = 0; i < plArrayElements(launch_arguments); ++i) {
+        for(size_t i = 0; i < plArrayElements(launch_arguments); ++i) {
             printf("  %s : %20s\n", launch_arguments[i].check, launch_arguments[i].description);
         }
         return EXIT_SUCCESS;
@@ -1083,7 +1085,7 @@ int main(int argc, char **argv) {
         snprintf(out_path, PL_SYSTEM_MAX_PATH, "%s", argv[2]);
     } else {
         char ext[32];
-        plStripExtension(ext, plGetFileName(in_path));
+        plStripExtension(ext, 32, plGetFileName(in_path));
         snprintf(out_path, PL_SYSTEM_MAX_PATH, "./%s.map", ext);
     }
 
@@ -1091,7 +1093,7 @@ int main(int argc, char **argv) {
 
     for(unsigned int i = 2; i < argc; i++) {
         if(argv[i][0] == '-') {
-            for(unsigned int j = 0; j < plArrayElements(launch_arguments); ++j) {
+            for(size_t j = 0; j < plArrayElements(launch_arguments); ++j) {
                 if(launch_arguments[j].check == NULL) {
                     break;
                 }

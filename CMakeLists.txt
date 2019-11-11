@@ -10,7 +10,13 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin/)
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
-add_subdirectory(platform/platform)
+function(build_platform)
+    set(PL_USE_GRAPHICS OFF CACHE BOOL "Graphics")
+    set(PL_USE_MODEL OFF CACHE BOOL "Model")
+    add_subdirectory(platform/platform)
+endfunction()
+
+build_platform()
 
 add_executable(t3d2map main.c)
 add_dependencies(t3d2map platform)
