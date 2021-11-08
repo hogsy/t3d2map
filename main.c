@@ -6,7 +6,7 @@
 #include <PL/platform_filesystem.h>
 #include <PL/platform_math.h>
 
-#define VERSION "0.01"
+#define VERSION "0.02"
 
 /* debug flags */
 #define DEBUG_PARSER
@@ -310,13 +310,30 @@ struct {
     unsigned int cur_line;
 } t3d;
 
+void print_state(void) {
+  printf(
+      "t3d state\n"
+      "cur_line=%d\n"
+      "cur_chunk=%d\n"
+      "num_actors=%d\n"
+      "num_brushes=%d\n"
+      "context=%d\n",
+
+      t3d.cur_line,
+      t3d.cur_chunk,
+      t3d.num_actors,
+      t3d.num_brushes,
+      t3d.chunks[t3d.cur_chunk].context
+  );
+}
+
 /* yeah, yeah... I know... shut-up. */
 #define SkipLine()      while(*t3d.cur_pos != '\n' && *t3d.cur_pos != '\r') { t3d.cur_pos++; } t3d.cur_line++;
 #define SkipSpaces()    while(*t3d.cur_pos == ' ') { t3d.cur_pos++; }
 #define ParseBlock()    while(*t3d.cur_pos != '\0')
 #define ParseLine()     while(*t3d.cur_pos != '\0' && *t3d.cur_pos != '\n' && *t3d.cur_pos != '\r')
 
-void ParseString(char *out) {
+void ParseString(char *out, size_t len) {
     SkipSpaces();
     if(*t3d.cur_pos == '=') t3d.cur_pos++;
     SkipSpaces();
@@ -327,9 +344,18 @@ void ParseString(char *out) {
             break;
         }
 
+        assert(i < len);
+        if(i >= len) {
+          printf("Failed to parse entire string, buffer is too small!\n");
+        }
+
         out[i++] = *t3d.cur_pos++;
     }
     out[i] = '\0';
+
+#ifdef DEBUG_PARSER
+    printf("value=%s\n", out);
+#endif
 }
 
 void ParseNext(void) {
@@ -367,8 +393,11 @@ void ParseNext(void) {
 }
 
 int ParseInteger(void) {
-    char n[4];
-    ParseString(n);
+    char n[11];
+    ParseString(n, sizeof(n));
+#ifdef DEBUG_PARSER
+  printf("value=%s\n", n);
+#endif
     return atoi(n);
 }
 
@@ -389,6 +418,10 @@ PLVector3 ParseVector(void) {
     };
 
     SkipLine();
+
+#ifdef DEBUG_PARSER
+  printf("value=%s\n", plPrintVector3(&vector, pl_int_var));
+#endif
 
     return vector;
 }
@@ -411,6 +444,7 @@ bool ChunkEnd(const char *chunk) {
         size_t len = strlen(chunk);
         if(pl_strncasecmp(t3d.cur_pos, chunk, len) != 0) {
             printf("error: missing end segment for %s!\n", chunk);
+            print_state();
             exit(EXIT_FAILURE);
         }
 
@@ -433,6 +467,10 @@ void ReadActor();
 
 bool ReadField(const char *prop) {
     SkipSpaces();
+
+#ifdef DEBUG_PARSER
+  printf("prop=%s\n", prop);
+#endif
 
     size_t len = strlen(prop);
     if(pl_strncasecmp(t3d.cur_pos, prop, len) == 0) {
@@ -461,6 +499,10 @@ bool ReadVectorField(const char *prop, PLVector3 *vector) {
 bool ReadProperty(const char *parm) {
     SkipSpaces();
 
+#ifdef DEBUG_PARSER
+  printf("prop=%s\n", parm);
+#endif
+
     char prop[16];
     snprintf(prop, sizeof(prop), "%s=", parm);
 
@@ -473,13 +515,9 @@ bool ReadProperty(const char *parm) {
     return false;
 }
 
-bool ReadPropertyString(const char *parm, char *out) {
+bool ReadPropertyString(const char *parm, char *out, size_t len) {
     if(ReadProperty(parm)) {
-#ifdef DEBUG_PARSER
-        printf("prop=%s\n", parm);
-#endif
-
-        ParseString(out);
+        ParseString(out, len);
         return true;
     }
 
@@ -548,7 +586,7 @@ void ReadChunk(void) {
         }
 
         char chunk_name[32];
-        ParseString(chunk_name);
+        ParseString(chunk_name, 32);
         printf("unhandled chunk \"%s\"!\n", chunk_name);
         exit(EXIT_FAILURE);
     }
@@ -561,15 +599,22 @@ void ReadPolygon(void) {
     print_heading("Polygon");
 
     ParseLine() {
-        if(ReadPropertyString("Item", t3d.cur_brush->cur_poly->item)) {
+        Polygon* polygon = t3d.cur_brush->cur_poly;
+        if(polygon == NULL) {
+          printf("Invalid polygon handle encountered, aborting!\n");
+          print_state();
+          exit(EXIT_FAILURE);
+        }
+
+        if(ReadPropertyString("Item", polygon->item, sizeof(polygon->item))) {
             continue;
         }
 
-        if(ReadPropertyString("Texture", t3d.cur_brush->cur_poly->texture)) {
+        if(ReadPropertyString("Texture", polygon->texture, sizeof(polygon->texture))) {
             continue;
         }
 
-        if(ReadPropertyString("Group", t3d.cur_brush->cur_poly->group)) {
+        if(ReadPropertyString("Group", t3d.cur_brush->cur_poly->group, sizeof(polygon->group))) {
             continue;
         }
 
@@ -640,6 +685,7 @@ void ReadPolyList(void) {
 
     if((t3d.cur_brush->poly_list = calloc(t3d.cur_brush->max_poly, sizeof(Polygon))) == NULL) {
         printf("error: failed to allocate %d polygons, aborting!\n", t3d.cur_brush->num_poly);
+        print_state();
         exit(EXIT_FAILURE);
     }
 
@@ -665,6 +711,7 @@ void ReadPolyList(void) {
         if((t3d.cur_brush->poly_list = realloc(t3d.cur_brush->poly_list, t3d.cur_brush->num_poly * sizeof(Polygon)))
            == NULL) {
             printf("error: failed to shrink polylist down!\n");
+            print_state();
             exit(EXIT_FAILURE);
         }
         t3d.cur_brush->max_poly = t3d.cur_brush->num_poly;
@@ -677,7 +724,7 @@ void ReadMap(void) {
 
     /* header */
     ParseLine() {
-        if(ReadPropertyString("Name", t3d.map.name)) {
+        if(ReadPropertyString("Name", t3d.map.name, sizeof(t3d.map.name))) {
             continue;
         }
 
@@ -709,13 +756,20 @@ void ReadActor(void) {
 
     print_heading("Actor");
 
+    Actor* actor = t3d.cur_actor;
+    if(actor == NULL) {
+      printf("Invalid actor handle encountered, aborting!\n");
+      print_state();
+      exit(EXIT_FAILURE);
+    }
+
     ParseLine() {
-        if(ReadPropertyString("Class", t3d.cur_actor->class)) {
-            t3d.cur_actor->class_index = GetActorIdentification(t3d.cur_actor->class);
+        if(ReadPropertyString("Class", actor->class, sizeof(actor->class))) {
+            actor->class_index = GetActorIdentification(actor->class);
             continue;
         }
 
-        if(ReadPropertyString("Name", t3d.cur_actor->name)) {
+        if(ReadPropertyString("Name", actor->name, sizeof(actor->name))) {
             continue;
         }
 
@@ -734,40 +788,40 @@ void ReadActor(void) {
             continue;
         }
 
-        if(ReadVectorField("Location", &t3d.cur_actor->location)) {
+        if(ReadVectorField("Location", &actor->location)) {
             continue;
         }
 
-        switch(t3d.cur_actor->class_index->id) {
+        switch(actor->class_index->id) {
             default:break;
 
             case ACT_LevelSummary:break;
             case ACT_Spotlight:break;
 
             case ACT_Light: {
-                if(ReadPropertyString("LightEffect", t3d.cur_actor->Light.effect)) {
+                if(ReadPropertyString("LightEffect", actor->Light.effect, sizeof(actor->Light.effect))) {
                     continue;
                 }
 
-                if(ReadPropertyInteger("LightBrightness", (int *) &t3d.cur_actor->Light.brightness)) {
+                if(ReadPropertyInteger("LightBrightness", (int *) &actor->Light.brightness)) {
                     continue;
                 }
 
-                if(ReadPropertyInteger("LightHue", (int *) &t3d.cur_actor->Light.hue)) {
+                if(ReadPropertyInteger("LightHue", (int *) &actor->Light.hue)) {
                     continue;
                 }
 
-                if(ReadPropertyInteger("LightRadius", (int *) &t3d.cur_actor->Light.radius)) {
+                if(ReadPropertyInteger("LightRadius", (int *) &actor->Light.radius)) {
                     continue;
                 }
 
-                if(ReadPropertyInteger("LightSaturation", (int *) &t3d.cur_actor->Light.saturation)) {
+                if(ReadPropertyInteger("LightSaturation", (int *) &actor->Light.saturation)) {
                     continue;
                 }
             } break;
 
             case ACT_Brush: {
-                if(ReadPropertyString("CsgOper", t3d.cur_actor->Brush.csg)) {
+                if(ReadPropertyString("CsgOper", actor->Brush.csg, sizeof(actor->Brush.csg))) {
                     continue;
                 }
             } break;
@@ -786,7 +840,7 @@ void ReadBrush(void) {
     print_heading("Brush");
 
     ParseLine() {
-        if(ReadPropertyString("Name", t3d.map.name)) {
+        if(ReadPropertyString("Name", t3d.map.name, sizeof(t3d.map.name))) {
             continue;
         }
 

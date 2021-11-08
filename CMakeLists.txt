@@ -12,7 +12,6 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
 function(build_platform)
     set(PL_USE_GRAPHICS OFF CACHE BOOL "Graphics")
-    set(PL_USE_MODEL OFF CACHE BOOL "Model")
     add_subdirectory(platform/platform)
 endfunction()
 
